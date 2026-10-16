@@ -1,4 +1,5 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body><title>RONLAB</title>
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>RONLAB</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=Saira:wght@300;400;500;700&display=swap">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style id="site-style">
@@ -2404,45 +2405,57 @@ function setupHero3d(p){
       return BOX.getCenter(CEN);
     }
     const CORN = Array.from({ length: 8 }, () => new THREE.Vector3());
-    function spanNdc(){   // horizontal extent (NDC) of the aircraft's part boxes
-      let lo = Infinity, hi = -Infinity;
+    function spanNdc(){   // NDC extent [xlo, xhi, ylo, yhi] of the aircraft's part boxes
+      let lo = Infinity, hi = -Infinity, ylo = Infinity, yhi = -Infinity;
       [root, groups.L, groups.R].forEach(o => o.traverse(m => {
         if (!m.isMesh) return; if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
         const b = m.geometry.boundingBox;
-        for (let i = 0; i < 8; i++) { CORN[i].set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMatrix4(m.matrixWorld).project(camera); lo = Math.min(lo, CORN[i].x); hi = Math.max(hi, CORN[i].x); }
+        for (let i = 0; i < 8; i++) { const c = CORN[i].set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMatrix4(m.matrixWorld).project(camera); lo = Math.min(lo, c.x); hi = Math.max(hi, c.x); ylo = Math.min(ylo, c.y); yhi = Math.max(yhi, c.y); }
       }));
-      return [lo, hi];
+      return [lo, hi, ylo, yhi];
     }
-    // portrait framing (zoom to fit + centring) is solved once per screen size on a grid of fold values and
-    // smoothed, so the camera glides instead of chasing the bounding boxes frame by frame
+    // framing (zoom to fit + centring) is solved once per screen size on a grid of fold values and smoothed,
+    // so the camera glides instead of chasing the bounding boxes frame by frame
     let FIT = null;
+    function targets(a, s){
+      if (a < 1) return { fx: 0.97 + (0.82 - 0.97) * s, fy: 0.62, cy: 0.60 };
+      return { fx: 0.74 + (0.50 - 0.74) * s, fy: 0.50 - 0.08 * s, cy: 0.555 };
+    }
+    // keep the fuselage (it never moves) at a fixed screen point and only zoom, so folding never reads as a camera pan
+    const BODYC = new THREE.Vector3(), BB = new THREE.Box3();
+    function bodyCenter(){ BB.setFromObject(root, false); return BB.getCenter(BODYC); }
     function solveFit(s, a, lim){
       pose(s); scene.updateMatrixWorld(true);
-      const setFov = () => { camera.aspect = a; camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(th / a)); camera.clearViewOffset(); camera.updateProjectionMatrix(); };
+      const setFov = () => { camera.aspect = a; camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(th / a)); camera.clearViewOffset(); camera.updateProjectionMatrix(); camera.updateMatrixWorld(true); };
+      const T = targets(a, s), bc = bodyCenter().clone();
       th = Math.min(CAM.thOpen + (CAM.thFold - CAM.thOpen) * s, lim); setFov();
-      const fill = 0.97 + (0.82 - 0.97) * s;
-      for (let it = 0; it < 3; it++) { const [lo, hi] = spanNdc(); th = Math.min(lim, th * (hi - lo) / (2 * fill)); setFov(); }
-      const [lo, hi] = spanNdc(), q = modelCenter().clone().project(camera);
-      return [th, (lo + hi) / 2 * vw / 2, (-q.y * vh / 2) - 0.10 * vh];
+      for (let it = 0; it < 4; it++) {
+        const e = spanNdc(), q = bc.clone().project(camera);
+        const ex = Math.max(q.x - e[0], e[1] - q.x), ey = Math.max(q.y - e[2], e[3] - q.y);
+        th = Math.min(lim, th * Math.max(ex / T.fx, ey / (T.fy * 1.1))); setFov();
+      }
+      const q = bc.clone().project(camera);
+      return [th, q.x * vw / 2, (-q.y * vh / 2) - (T.cy - 0.5) * vh];
     }
+    // zoom is solved only for "open" and "folded" and eased between them (log-space, smoothstep), so it is strictly
+    // one-directional — no bounce. The fuselage centre sets the offsets, which then follow the zoom smoothly too.
     function buildFit(a, lim){
-      const N = 24, raw = []; camera.updateMatrixWorld(true);
-      for (let i = 0; i <= N; i++) raw.push(solveFit(i / N, a, lim));
-      let arr = raw;
-      for (let pass = 0; pass < 3; pass++) arr = arr.map((r, i) => r.map((_, k) => { let sum = 0, w = 0; for (let j = -2; j <= 2; j++) { const q = arr[Math.min(N, Math.max(0, i + j))]; const ww = 3 - Math.abs(j); sum += q[k] * ww; w += ww; } return sum / w; }));
-      FIT = { N, arr, key: vw + 'x' + vh }; pose(Math.max(0, st.s));
+      camera.updateMatrixWorld(true);
+      const r0 = solveFit(0, a, lim), r1 = solveFit(1, a, lim);
+      FIT = { key: vw + 'x' + vh, l0: Math.log(r0[0]), l1: Math.log(r1[0]), a, s0: targets(a, 0), s1: targets(a, 1) };
+      pose(Math.max(0, st.s));
     }
+    const BC = new THREE.Vector3();
     function frame(s){
       const a = vw / vh, lim = Math.min(CAM.plateTan, CAM.plateTan * a) * 0.995;
-      let offX = 0, offY = 0;
-      if (a < 1) {
-        if (!FIT || FIT.key !== vw + 'x' + vh) buildFit(a, lim);
-        const x = Math.min(1, Math.max(0, s)) * FIT.N, i = Math.min(FIT.N - 1, Math.floor(x)), f = x - i, A0 = FIT.arr[i], A1 = FIT.arr[i + 1];
-        th = A0[0] + (A1[0] - A0[0]) * f; offX = A0[1] + (A1[1] - A0[1]) * f; offY = A0[2] + (A1[2] - A0[2]) * f;
-      } else th = Math.min(CAM.thOpen + (CAM.thFold - CAM.thOpen) * s, lim);
-      camera.aspect = a; camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(th / a)); camera.clearViewOffset();
-      if (a < 1) camera.setViewOffset(vw, vh, offX, offY, vw, vh);
-      camera.updateProjectionMatrix();
+      if (!FIT || FIT.key !== vw + 'x' + vh) buildFit(a, lim);
+      const x = Math.min(1, Math.max(0, s)), e = x * x * (3 - 2 * x);
+      th = Math.exp(FIT.l0 + (FIT.l1 - FIT.l0) * e);
+      camera.aspect = a; camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(th / a)); camera.clearViewOffset(); camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
+      if (!st.bc) { const keep = st.s; st.bc = bodyCenter().clone(); }
+      const q = BC.copy(st.bc).project(camera), cy = FIT.s0.cy + (FIT.s1.cy - FIT.s0.cy) * e;
+      const offX = q.x * vw / 2, offY = (-q.y * vh / 2) - (cy - 0.5) * vh;
+      camera.setViewOffset(vw, vh, offX, offY, vw, vh); camera.updateProjectionMatrix();
       const size = vw * CAM.plateTan / th; plate.style.width = plate.style.height = size + 'px';
       plate.style.transform = 'translate(' + ((vw - size) / 2 - offX).toFixed(2) + 'px,' + ((vh - size) / 2 - offY).toFixed(2) + 'px)';
     }
