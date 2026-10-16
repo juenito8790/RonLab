@@ -1,4 +1,5 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body><title>RONLAB</title>
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>RONLAB</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=Saira:wght@300;400;500;700&display=swap">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style id="site-style">
@@ -2397,12 +2398,39 @@ function setupHero3d(p){
     }
     // camera framing + plate (zoom = scale the plate about its centre, so the room always matches the 3D camera)
     let vw = 1, vh = 1, th = CAM.thOpen;
+    const BOX = new THREE.Box3(), TB = new THREE.Box3(), CEN = new THREE.Vector3();
+    function modelCenter(){
+      BOX.makeEmpty(); scene.updateMatrixWorld(true);
+      [root, groups.L, groups.R].forEach(o => { TB.setFromObject(o, false); if (!TB.isEmpty()) BOX.union(TB); });
+      return BOX.getCenter(CEN);
+    }
+    const CORN = Array.from({ length: 8 }, () => new THREE.Vector3());
+    function spanNdc(){   // horizontal extent (NDC) of the aircraft's part boxes
+      let lo = Infinity, hi = -Infinity;
+      [root, groups.L, groups.R].forEach(o => o.traverse(m => {
+        if (!m.isMesh) return; if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        const b = m.geometry.boundingBox;
+        for (let i = 0; i < 8; i++) { CORN[i].set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMatrix4(m.matrixWorld).project(camera); lo = Math.min(lo, CORN[i].x); hi = Math.max(hi, CORN[i].x); }
+      }));
+      return [lo, hi];
+    }
     function frame(s){
       const a = vw / vh, want = CAM.thOpen + (CAM.thFold - CAM.thOpen) * s, lim = Math.min(CAM.plateTan, CAM.plateTan * a) * 0.995;
-      th = Math.min(want * (a < 1 ? 1.25 : 1), lim);
-      camera.aspect = a; camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(th / a)); camera.updateProjectionMatrix();
+      const setFov = () => { camera.aspect = a; camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(th / a)); camera.clearViewOffset(); camera.updateProjectionMatrix(); };
+      th = Math.min(want, lim); setFov();
+      let offX = 0, offY = 0;
+      if (a < 1) {
+        // portrait: fit the aircraft to the screen width (open wings almost touch both edges, folded ~82%)
+        scene.updateMatrixWorld(true);
+        const fill = 0.97 + (0.82 - 0.97) * s;
+        for (let it = 0; it < 3; it++) { const [lo, hi] = spanNdc(); th = Math.min(lim, th * (hi - lo) / (2 * fill)); setFov(); }
+        const [lo, hi] = spanNdc(), q = modelCenter().clone().project(camera);
+        offX = Math.round((lo + hi) / 2 * vw / 2);
+        offY = Math.round((-q.y * vh / 2) - (0.60 - 0.5) * vh);
+        camera.setViewOffset(vw, vh, offX, offY, vw, vh); camera.updateProjectionMatrix();
+      }
       const size = vw * CAM.plateTan / th; plate.style.width = plate.style.height = size + 'px';
-      plate.style.left = (vw - size) / 2 + 'px'; plate.style.top = (vh - size) / 2 + 'px';
+      plate.style.left = ((vw - size) / 2 - offX) + 'px'; plate.style.top = ((vh - size) / 2 - offY) + 'px';
     }
     const pin = sec.querySelector('.h3-pin');
     function resize(){ setHdr(); vw = stage.clientWidth || 1; vh = stage.clientHeight || 1; renderer.setSize(vw, vh, false); st.s = -1; }
